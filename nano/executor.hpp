@@ -37,6 +37,19 @@ class executor {
 
     std::array<detail::buffer_and_coroutine_stack<B>, N> stacks_;
 
+    [[nodiscard]] constexpr bool execution_complete_() const noexcept {
+        return std::all_of(stacks_.begin(), stacks_.end(), [](const auto& elem) { return elem.stack().empty(); });
+    }
+
+    constexpr void step_() noexcept {
+        for (const auto& elem : stacks_) {
+            const auto& stack = elem.stack();
+            if (stack.empty() || !stack.peek_frame_header().data().ready.load(std::memory_order_relaxed)) { continue; }
+
+            stack.peek_frame_header().data().handle.resume();
+        }
+    }
+
    public:
     [[nodiscard]] coroutine_context find_available_context() noexcept {
         const auto iter =
@@ -45,22 +58,14 @@ class executor {
         return coroutine_context{iter->stack_view()};
     }
 
-    constexpr void wait() {
+    [[nodiscard]] constexpr bool execution_complete() const noexcept { return execution_complete_(); }
+
+    constexpr void step() noexcept { step_(); }
+
+    constexpr void wait() noexcept {
         for (;;) {
-            const bool execution_complete =
-                std::all_of(stacks_.begin(), stacks_.end(), [](const auto& elem) { return elem.stack().empty(); });
-
-            if (execution_complete) { return; }
-
-            for (const auto& elem : stacks_) {
-                const auto& stack = elem.stack();
-
-                if (stack.empty() || !stack.peek_frame_header().data().ready.load(std::memory_order_relaxed)) {
-                    continue;
-                }
-
-                stack.peek_frame_header().data().handle.resume();
-            }
+            if (execution_complete_()) { return; }
+            step_();
         }
     }
 };
